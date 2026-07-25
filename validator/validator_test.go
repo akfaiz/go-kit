@@ -6,6 +6,7 @@ import (
 
 	"github.com/akfaiz/go-kit/validator"
 	"github.com/go-playground/locales/fr"
+	govalidator "github.com/go-playground/validator/v10"
 	frTranslations "github.com/go-playground/validator/v10/translations/fr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -469,6 +470,55 @@ func TestValidate_CustomTags(t *testing.T) {
 	require.ErrorAs(t, err, &vErr)
 	assert.Equal(t, "full_name", vErr.First().Field)
 	assert.Equal(t, "Full Name is a required field", vErr.First().Message)
+}
+
+func TestValidate_RegisterValidationAddsCustomRule(t *testing.T) {
+	type usernameRequest struct {
+		Username string `json:"username" validate:"required,notreserved"`
+	}
+
+	v := validator.New()
+	err := v.RegisterValidation("notreserved", func(fl govalidator.FieldLevel) bool {
+		return fl.Field().String() != "admin"
+	})
+	require.NoError(t, err)
+
+	req := &usernameRequest{Username: "admin"}
+	valErr := v.Validate(req)
+	require.Error(t, valErr)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, valErr, &vErr)
+	assert.Equal(t, "username", vErr.First().Field)
+
+	req.Username = "someone-else"
+	assert.NoError(t, v.Validate(req))
+}
+
+func TestValidate_RegisterValidationCtxReceivesContext(t *testing.T) {
+	type ctxKeyType struct{}
+	ctxKey := ctxKeyType{}
+
+	type widgetRequest struct {
+		Name string `json:"name" validate:"required,matchescontext"`
+	}
+
+	v := validator.New()
+	err := v.RegisterValidationCtx("matchescontext", func(ctx context.Context, fl govalidator.FieldLevel) bool {
+		expected, _ := ctx.Value(ctxKey).(string)
+		return fl.Field().String() == expected
+	})
+	require.NoError(t, err)
+
+	ctx := context.WithValue(context.Background(), ctxKey, "widget")
+	require.NoError(t, v.ValidateContext(ctx, &widgetRequest{Name: "widget"}))
+
+	valErr := v.ValidateContext(ctx, &widgetRequest{Name: "gadget"})
+	require.Error(t, valErr)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, valErr, &vErr)
+	assert.Equal(t, "name", vErr.First().Field)
 }
 
 func TestValidate_CustomHeaderTag(t *testing.T) {

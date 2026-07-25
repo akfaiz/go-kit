@@ -132,6 +132,20 @@ func (v *Validate) Validate(i any) error {
 	return v.ValidateContext(context.Background(), i)
 }
 
+// RegisterValidation registers a custom validation function for tag, so struct fields tagged
+// validate:"<tag>" are checked by fn. It wraps govalidator.Validate.RegisterValidation directly;
+// callValidationEvenIfNull follows the same semantics as the underlying library (fn runs even
+// when the field is a nil pointer or interface).
+func (v *Validate) RegisterValidation(tag string, fn govalidator.Func, callValidationEvenIfNull ...bool) error {
+	return v.validate.RegisterValidation(tag, fn, callValidationEvenIfNull...)
+}
+
+// RegisterValidationCtx is the context-aware variant of RegisterValidation, for validation
+// functions that need access to the context.Context passed to ValidateContext.
+func (v *Validate) RegisterValidationCtx(tag string, fn govalidator.FuncCtx, callValidationEvenIfNull ...bool) error {
+	return v.validate.RegisterValidationCtx(tag, fn, callValidationEvenIfNull...)
+}
+
 // getTranslator resolves the translator for the current request locale, falling back to
 // v.defaultLocale when the context extractor is unset or its locale isn't registered.
 func (v *Validate) getTranslator(ctx context.Context) ut.Translator {

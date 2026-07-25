@@ -122,6 +122,29 @@ Keys use the same dot-notation field path reported in `FieldError.Field` (indepe
 A `Messages()` entry wins outright for that field/rule; an `Attributes()` entry only replaces
 the field's display name inside the default translated text.
 
+## Custom validation rules
+
+`RegisterValidation`/`RegisterValidationCtx` wrap the underlying
+`govalidator.Validate.RegisterValidation`/`RegisterValidationCtx` directly, so you can add your
+own `validate:"..."` rules:
+
+```go
+import govalidator "github.com/go-playground/validator/v10"
+
+v := validator.New()
+err := v.RegisterValidation("notreserved", func(fl govalidator.FieldLevel) bool {
+	return fl.Field().String() != "admin"
+})
+
+type UsernameRequest struct {
+	Username string `json:"username" validate:"required,notreserved"`
+}
+```
+
+`RegisterValidation` takes a `validator.Func` (an alias for `govalidator.Func`).
+`RegisterValidationCtx` takes a `validator.FuncCtx` instead, receiving the `context.Context`
+passed to `ValidateContext`.
+
 ## Header validation
 
 Fields tagged with `header` (or `WithHeaderTag`) are validated the same as
