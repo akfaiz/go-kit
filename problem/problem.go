@@ -14,6 +14,7 @@ type Error struct {
 	Errors   any    `json:"errors,omitempty"`
 
 	cause error
+	stack []uintptr
 }
 
 // ErrorFunc is a function type that generates an Error with optional details.
@@ -49,6 +50,7 @@ func New(title, typeName string, status int, detail ...string) *Error {
 		Title:  title,
 		Status: status,
 		Detail: errDetail,
+		stack:  captureStack(),
 	}
 }
 

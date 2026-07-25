@@ -2,10 +2,13 @@ package problem_test
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/akfaiz/go-kit/problem"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
@@ -117,4 +120,49 @@ func TestError_WithInstance(t *testing.T) {
 
 	assert.Same(t, err, result)
 	assert.Equal(t, "/users/123", err.Instance)
+}
+
+func TestError_StackTrace(t *testing.T) {
+	err := problem.New("Not Found", "not_found", 404)
+
+	trace := err.StackTrace()
+
+	require.NotEmpty(t, trace)
+	assert.Contains(t, trace[0].Function, "TestError_StackTrace")
+	assert.Contains(t, trace[0].File, "problem_test.go")
+	assert.NotZero(t, trace[0].Line)
+}
+
+func TestError_StackTrace_CapturedPerCall(t *testing.T) {
+	errNotFound := problem.Register("Not Found", "not_found", 404)
+
+	first := errNotFound()
+	second := errNotFound()
+
+	require.NotEmpty(t, first.StackTrace())
+	require.NotEmpty(t, second.StackTrace())
+	assert.Contains(t, first.StackTrace()[0].Function, "TestError_StackTrace_CapturedPerCall")
+}
+
+func TestError_Format(t *testing.T) {
+	err := problem.New("Not Found", "not_found", 404, "resource missing")
+
+	t.Run("%s", func(t *testing.T) {
+		assert.Equal(t, "Not Found: resource missing", fmt.Sprintf("%s", err))
+	})
+
+	t.Run("%v", func(t *testing.T) {
+		assert.Equal(t, "Not Found: resource missing", fmt.Sprintf("%v", err))
+	})
+
+	t.Run("%q", func(t *testing.T) {
+		assert.Equal(t, `"Not Found: resource missing"`, fmt.Sprintf("%q", err))
+	})
+
+	t.Run("%+v", func(t *testing.T) {
+		out := fmt.Sprintf("%+v", err)
+		require.True(t, strings.HasPrefix(out, "Not Found: resource missing\n"))
+		assert.Contains(t, out, "TestError_Format")
+		assert.Contains(t, out, "problem_test.go:")
+	})
 }

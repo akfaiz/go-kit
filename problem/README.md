@@ -37,6 +37,28 @@ if errors.Is(err, ErrNotFound()) {
 }
 ```
 
+## Stack traces
+
+Like [github.com/pkg/errors](https://github.com/pkg/errors), `New` (and therefore
+`Register`) captures the call stack at creation time. Print it with `%+v`, or walk it via
+`StackTrace()`:
+
+```go
+err := problem.New("Internal Server Error", "internal_error", 500)
+
+fmt.Printf("%+v", err)
+// Internal Server Error
+// main.handler
+//     /app/main.go:42
+// ...
+
+for _, frame := range err.StackTrace() {
+	fmt.Println(frame) // "/app/main.go:42 main.handler"
+}
+```
+
+`%s`, `%v`, and `%q` print just the error message; only `%+v` includes the stack.
+
 ## API
 
 | Method | Description |
@@ -48,3 +70,5 @@ if errors.Is(err, ErrNotFound()) {
 | `(*Error) WithCause(error) *Error` | Set wrapped cause for `errors.Is`/`errors.As` |
 | `(*Error) Is(target error) bool` | Matches `target` by `Type`, so `errors.Is` works across instances |
 | `(*Error) WithInstance(string) *Error` | Set `Instance` (RFC 7807 URI) |
+| `(*Error) StackTrace() []Frame` | Call stack captured when the error was created |
+| `(*Error) Format(fmt.State, rune)` | Implements `fmt.Formatter`; `%+v` includes the stack trace |
