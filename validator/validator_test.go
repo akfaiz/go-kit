@@ -537,3 +537,60 @@ func TestValidate_CustomHeaderTag(t *testing.T) {
 	assert.Equal(t, "Authorization", vErr.First().Field)
 	assert.Equal(t, validator.SourceHeader, vErr.First().Source)
 }
+
+type registerRequestWithCustomAttributes struct {
+	Email                string `json:"email" validate:"required,email"`
+	Password             string `json:"password" validate:"required,eqfield=PasswordConfirmation"`
+	PasswordConfirmation string `json:"password_confirmation" validate:"required"`
+}
+
+func (registerRequestWithCustomAttributes) Attributes() map[string]string {
+	return map[string]string{
+		"email":                 "Email Address",
+		"password":              "Password",
+		"password_confirmation": "Confirm Password",
+	}
+}
+
+func TestValidate_AttributesProviderOverridesFieldNameInMessage_CustomAttributes(t *testing.T) {
+	v := validator.New()
+	req := &registerRequestWithCustomAttributes{
+		Email:                "",
+		Password:             "",
+		PasswordConfirmation: "",
+	}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr, "expected *ValidationError, got %T", err)
+
+	found := map[string]string{}
+	for _, fieldErr := range *vErr {
+		found[fieldErr.Field] = fieldErr.Message
+	}
+
+	assert.Equal(t, "Email Address is a required field", found["email"])
+	assert.Equal(t, "Password is a required field", found["password"])
+	assert.Equal(t, "Confirm Password is a required field", found["password_confirmation"])
+
+	req = &registerRequestWithCustomAttributes{
+		Email:                "invalid-email",
+		Password:             "password",
+		PasswordConfirmation: "different",
+	}
+
+	err = v.Validate(req)
+	require.Error(t, err)
+
+	require.ErrorAs(t, err, &vErr, "expected *ValidationError, got %T", err)
+
+	found = map[string]string{}
+	for _, fieldErr := range *vErr {
+		found[fieldErr.Field] = fieldErr.Message
+	}
+
+	assert.Equal(t, "Email Address must be a valid email address", found["email"])
+	assert.Equal(t, "Password must be equal to Confirm Password", found["password"])
+}

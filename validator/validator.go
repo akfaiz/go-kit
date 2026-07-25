@@ -188,7 +188,7 @@ func (v *Validate) ValidateContext(ctx context.Context, i any) error {
 	seenFields := make(map[string]struct{}, len(validationErrors))
 	fieldErrors := make([]FieldError, 0, len(validationErrors))
 	for _, fieldErr := range validationErrors {
-		field, source, keyPath := v.jsonFieldPath(i, fieldErr.StructNamespace(), fieldErr.StructField())
+		field, source, keyPath, parentType := v.jsonFieldPath(i, fieldErr.StructNamespace(), fieldErr.StructField())
 		if _, seen := seenFields[field]; seen {
 			continue
 		}
@@ -197,9 +197,23 @@ func (v *Validate) ValidateContext(ctx context.Context, i any) error {
 		message := fieldErr.Translate(trans)
 		if custom, ok := msgs[keyPath+"."+fieldErr.Tag()]; ok {
 			message = custom
-		} else if attr, ok := attrs[keyPath]; ok {
-			if leaf := fieldErr.Field(); leaf != "" {
-				message = strings.Replace(message, leaf, attr, 1)
+		} else {
+			if attr, ok := attrs[keyPath]; ok {
+				if leaf := fieldErr.Field(); leaf != "" {
+					message = strings.Replace(message, leaf, attr, 1)
+				}
+			}
+			// Cross-field rules (eqfield, gtfield, ...) embed the compared field's raw struct
+			// field name via Param(), untouched by RegisterTagNameFunc; resolve and substitute
+			// it the same way so AttributesProvider can override it too.
+			if param := fieldErr.Param(); param != "" && parentType != nil {
+				if paramName, _, _ := v.resolveJSONNameAndType(parentType, param, ""); paramName != "" {
+					replacement := paramName
+					if attr, ok := attrs[siblingMessageKey(keyPath, paramName)]; ok {
+						replacement = attr
+					}
+					message = strings.Replace(message, param, replacement, 1)
+				}
 			}
 		}
 
@@ -227,38 +241,42 @@ type pathSegment struct {
 // the namespace resolves empty. The returned Source reflects which tag (json/query/param/form/header)
 // resolved the path's root field, defaulting to SourceBody when none matched. The third result is a
 // message key: the same path in dot notation with "*" for every index, used to look up
-// MessagesProvider/AttributesProvider overrides independent of v.fieldPathFormat.
-func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (string, Source, string) {
+// MessagesProvider/AttributesProvider overrides independent of v.fieldPathFormat. The fourth
+// result is the reflect.Type of the struct that directly declares the resolved field — used to
+// resolve sibling field names (e.g. govalidator.FieldError.Param() for eqfield/gtfield/etc.) for
+// AttributesProvider substitution. It is nil when the path couldn't be walked.
+func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (string, Source, string, reflect.Type) {
 	fallbackSegments := []pathSegment{{value: fallback}}
 
 	if structNamespace == "" {
-		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 
 	t := reflect.TypeOf(i)
 	if t == nil {
-		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 
 	parts := strings.Split(structNamespace, ".")
 	if len(parts) == 0 {
-		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 
 	// Skip the root struct name in namespace.
 	parts = parts[1:]
 	if len(parts) == 0 {
-		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 
 	segments := make([]pathSegment, 0, len(parts))
 	current := t
+	parentType := t
 	source := SourceBody
 	sourceResolved := false
 
@@ -268,6 +286,7 @@ func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (strin
 			continue
 		}
 
+		parentType = current
 		jsonName, nextType, segSource := v.resolveJSONNameAndType(current, name, indexSuffix)
 		if !sourceResolved {
 			source = segSource
@@ -281,10 +300,20 @@ func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (strin
 	}
 
 	if len(segments) == 0 {
-		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 
-	return v.formatPath(segments), source, formatMessageKey(segments)
+	return v.formatPath(segments), source, formatMessageKey(segments), parentType
+}
+
+// siblingMessageKey builds the message key for a field named name declared in the same struct as
+// the field keyed by keyPath — i.e. keyPath with its last dot-segment replaced by name. Used to
+// look up AttributesProvider overrides for sibling fields referenced by cross-field rules.
+func siblingMessageKey(keyPath, name string) string {
+	if idx := strings.LastIndex(keyPath, "."); idx >= 0 {
+		return keyPath[:idx+1] + name
+	}
+	return name
 }
 
 // formatMessageKey renders segments as a dot path with "*" standing in for slice/array indices,

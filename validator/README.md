@@ -122,6 +122,10 @@ Keys use the same dot-notation field path reported in `FieldError.Field` (indepe
 A `Messages()` entry wins outright for that field/rule; an `Attributes()` entry only replaces
 the field's display name inside the default translated text.
 
+`Attributes()` also applies to the *other* field named in cross-field rules (`eqfield`,
+`gtfield`, `ltfield`, etc.) — e.g. `validate:"eqfield=PasswordConfirmation"` renders
+`PasswordConfirmation`'s own attribute, if one is set, instead of its raw struct field name.
+
 ## Custom validation rules
 
 `RegisterValidation`/`RegisterValidationCtx` wrap the underlying
