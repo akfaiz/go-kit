@@ -1,6 +1,6 @@
 module github.com/akfaiz/go-kit
 
-go 1.25.9
+go 1.25.0
 
 require (
 	github.com/go-playground/locales v0.14.1
