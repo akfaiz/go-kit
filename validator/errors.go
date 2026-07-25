@@ -5,10 +5,31 @@ import (
 	"strings"
 )
 
+// Source identifies which part of an HTTP request a validated field came from.
+type Source string
+
+const (
+	// SourceBody marks a field resolved from the JSON body tag (the default when no
+	// query/param/form/header tag is present).
+	SourceBody Source = "body"
+	// SourceQuery marks a field resolved from the query tag.
+	SourceQuery Source = "query"
+	// SourceParam marks a field resolved from the path param tag.
+	SourceParam Source = "param"
+	// SourceForm marks a field resolved from the form tag.
+	SourceForm Source = "form"
+	// SourceHeader marks a field resolved from the header tag.
+	SourceHeader Source = "header"
+)
+
 // FieldError represents a validation error for a specific field, containing the field name and the error message.
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+	// Source identifies which part of the request Field was resolved from (body, query,
+	// param, form, or header). It is empty for FieldError values built manually via
+	// NewError, NewErrors, Add, or Addf.
+	Source Source `json:"source,omitempty"`
 }
 
 // ValidationError represents a collection of field errors that occurred during validation.

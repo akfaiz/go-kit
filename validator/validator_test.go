@@ -49,6 +49,17 @@ type formRequest struct {
 	Name string `form:"name" validate:"required" label:"Name"`
 }
 
+type headerRequest struct {
+	Authorization string `header:"Authorization" validate:"required" label:"Authorization"`
+}
+
+type mixedSourceRequest struct {
+	Page          int           `query:"page" validate:"required,min=1" label:"Page"`
+	ID            string        `param:"id" validate:"required" label:"ID"`
+	Authorization string        `header:"Authorization" validate:"required" label:"Authorization"`
+	Profile       nestedProfile `json:"profile"`
+}
+
 type priorityRequest struct {
 	Field string `json:"json_field" query:"query_field" validate:"required" label:"Label Field"`
 }
@@ -315,6 +326,46 @@ func TestValidate_SupportsFormTags(t *testing.T) {
 	require.ErrorAs(t, err, &vErr)
 	assert.Equal(t, "name", vErr.First().Field)
 	assert.Equal(t, "Name is a required field", vErr.First().Message)
+}
+
+func TestValidate_SupportsHeaderTags(t *testing.T) {
+	v := validator.New()
+	req := &headerRequest{Authorization: ""}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "Authorization", vErr.First().Field)
+	assert.Equal(t, "Authorization is a required field", vErr.First().Message)
+	assert.Equal(t, validator.SourceHeader, vErr.First().Source)
+}
+
+func TestValidate_FieldErrorSourcePerTag(t *testing.T) {
+	v := validator.New()
+	req := &mixedSourceRequest{
+		Page:          0,
+		ID:            "",
+		Authorization: "",
+		Profile:       nestedProfile{Street: ""},
+	}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+
+	sources := map[string]validator.Source{}
+	for _, fieldErr := range *vErr {
+		sources[fieldErr.Field] = fieldErr.Source
+	}
+
+	assert.Equal(t, validator.SourceQuery, sources["page"])
+	assert.Equal(t, validator.SourceParam, sources["id"])
+	assert.Equal(t, validator.SourceHeader, sources["Authorization"])
+	assert.Equal(t, validator.SourceBody, sources["profile.street"])
 }
 
 func TestValidate_TagPriority(t *testing.T) {

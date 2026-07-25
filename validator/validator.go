@@ -24,6 +24,7 @@ type Validate struct {
 	queryTag         string
 	paramTag         string
 	formTag          string
+	headerTag        string
 }
 
 // Locale registers a supported locale for translated validation messages.
@@ -53,6 +54,8 @@ type Config struct {
 	CustomParamTag string
 	// CustomFormTag overrides the struct tag used to resolve the form field name. Defaults to "form".
 	CustomFormTag string
+	// CustomHeaderTag overrides the struct tag used to resolve the header field name. Defaults to "header".
+	CustomHeaderTag string
 	// Locales overrides the set of supported locales. Defaults to English ("en") only.
 	Locales []Locale
 	// DefaultLocale is used when the context extractor is unset, returns ok=false, or resolves to an
@@ -84,8 +87,8 @@ const (
 )
 
 // New creates a new Validate instance with custom tag name resolution and registered locale translations.
-// With no Config, it resolves field names from the "label", "json", "query", "param", and "form" tags
-// (in that order) and supports only the English ("en") locale.
+// With no Config, it resolves field names from the "label", "json", "query", "param", "form", and
+// "header" tags (in that order) and supports only the English ("en") locale.
 func New(cfg ...Config) *Validate {
 	v := govalidator.New()
 
@@ -94,6 +97,7 @@ func New(cfg ...Config) *Validate {
 	queryTag := "query"
 	paramTag := "param"
 	formTag := "form"
+	headerTag := "header"
 	var contextExtractor ContextExtractor
 	var customLocales []Locale
 	var defaultLocale string
@@ -114,6 +118,9 @@ func New(cfg ...Config) *Validate {
 		if cfg[0].CustomFormTag != "" {
 			formTag = cfg[0].CustomFormTag
 		}
+		if cfg[0].CustomHeaderTag != "" {
+			headerTag = cfg[0].CustomHeaderTag
+		}
 		if cfg[0].ContextExtractor != nil {
 			contextExtractor = cfg[0].ContextExtractor
 		}
@@ -132,7 +139,7 @@ func New(cfg ...Config) *Validate {
 		if label := fld.Tag.Get(labelTag); label != "" {
 			return label
 		}
-		for _, tag := range []string{jsonTag, queryTag, paramTag, formTag} {
+		for _, tag := range []string{jsonTag, queryTag, paramTag, formTag, headerTag} {
 			if name := fld.Tag.Get(tag); name != "" {
 				name = strings.Split(name, ",")[0]
 				if name != "" && name != "-" {
@@ -167,6 +174,7 @@ func New(cfg ...Config) *Validate {
 		queryTag:         queryTag,
 		paramTag:         paramTag,
 		formTag:          formTag,
+		headerTag:        headerTag,
 	}
 }
 
@@ -209,7 +217,7 @@ func (v *Validate) ValidateContext(ctx context.Context, i any) error {
 	seenFields := make(map[string]struct{}, len(validationErrors))
 	fieldErrors := make([]FieldError, 0, len(validationErrors))
 	for _, fieldErr := range validationErrors {
-		field := v.jsonFieldPath(i, fieldErr.StructNamespace(), fieldErr.StructField())
+		field, source := v.jsonFieldPath(i, fieldErr.StructNamespace(), fieldErr.StructField())
 		if _, seen := seenFields[field]; seen {
 			continue
 		}
@@ -218,6 +226,7 @@ func (v *Validate) ValidateContext(ctx context.Context, i any) error {
 		fieldErrors = append(fieldErrors, FieldError{
 			Field:   field,
 			Message: fieldErr.Translate(trans),
+			Source:  source,
 		})
 	}
 
@@ -235,38 +244,41 @@ type pathSegment struct {
 // built from the configured field-name tags, formatted per v.fieldPathFormat (e.g. "phones[0].number"
 // for FieldPathDot or "/phones/0/number" for FieldPathJSONPointer), by walking i's type alongside
 // the namespace. It falls back to fallback, formatted the same way, if i's type can't be walked or
-// the namespace resolves empty.
-func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) string {
+// the namespace resolves empty. The returned Source reflects which tag (json/query/param/form/header)
+// resolved the path's root field, defaulting to SourceBody when none matched.
+func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (string, Source) {
 	fallbackSegments := []pathSegment{{value: fallback}}
 
 	if structNamespace == "" {
-		return v.formatPath(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody
 	}
 
 	t := reflect.TypeOf(i)
 	if t == nil {
-		return v.formatPath(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody
 	}
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		return v.formatPath(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody
 	}
 
 	parts := strings.Split(structNamespace, ".")
 	if len(parts) == 0 {
-		return v.formatPath(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody
 	}
 
 	// Skip the root struct name in namespace.
 	parts = parts[1:]
 	if len(parts) == 0 {
-		return v.formatPath(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody
 	}
 
 	segments := make([]pathSegment, 0, len(parts))
 	current := t
+	source := SourceBody
+	sourceResolved := false
 
 	for _, part := range parts {
 		name, indexSuffix := splitFieldAndIndex(part)
@@ -274,7 +286,11 @@ func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) string
 			continue
 		}
 
-		jsonName, nextType := v.resolveJSONNameAndType(current, name, indexSuffix)
+		jsonName, nextType, segSource := v.resolveJSONNameAndType(current, name, indexSuffix)
+		if !sourceResolved {
+			source = segSource
+			sourceResolved = true
+		}
 		segments = append(segments, pathSegment{value: jsonName})
 		for _, index := range splitIndices(indexSuffix) {
 			segments = append(segments, pathSegment{value: index, isIndex: true})
@@ -283,10 +299,10 @@ func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) string
 	}
 
 	if len(segments) == 0 {
-		return v.formatPath(fallbackSegments)
+		return v.formatPath(fallbackSegments), SourceBody
 	}
 
-	return v.formatPath(segments)
+	return v.formatPath(segments), source
 }
 
 // formatPath renders segments per v.fieldPathFormat.
@@ -336,26 +352,46 @@ func splitIndices(indexSuffix string) []string {
 	return strings.Split(trimmed, "][")
 }
 
+// tagSource pairs a configured field-name tag with the Source it represents.
+type tagSource struct {
+	tag    string
+	source Source
+}
+
+// tagSources returns the configured field-name tags paired with their Source, in
+// resolution priority order.
+func (v *Validate) tagSources() []tagSource {
+	return []tagSource{
+		{v.jsonTag, SourceBody},
+		{v.queryTag, SourceQuery},
+		{v.paramTag, SourceParam},
+		{v.formTag, SourceForm},
+		{v.headerTag, SourceHeader},
+	}
+}
+
 // resolveJSONNameAndType resolves the field-name tag value for the struct field named name on
 // current, and returns the (dereferenced, index-unwrapped) type of that field for the next step
-// of the namespace walk. It falls back to name itself when current isn't a struct or the field
-// isn't found.
-func (v *Validate) resolveJSONNameAndType(current reflect.Type, name, indexSuffix string) (string, reflect.Type) {
+// of the namespace walk, along with the Source of the tag that resolved the name (SourceBody if
+// none matched). It falls back to name itself when current isn't a struct or the field isn't found.
+func (v *Validate) resolveJSONNameAndType(current reflect.Type, name, indexSuffix string) (string, reflect.Type, Source) {
 	current = dereferenceType(current)
 	if current.Kind() != reflect.Struct {
-		return name, current
+		return name, current, SourceBody
 	}
 
 	field, ok := current.FieldByName(name)
 	if !ok {
-		return name, current
+		return name, current, SourceBody
 	}
 
 	jsonName := ""
-	for _, tag := range []string{v.jsonTag, v.queryTag, v.paramTag, v.formTag} {
-		if name := field.Tag.Get(tag); name != "" {
-			jsonName = strings.Split(name, ",")[0]
+	source := SourceBody
+	for _, ts := range v.tagSources() {
+		if tagVal := field.Tag.Get(ts.tag); tagVal != "" {
+			jsonName = strings.Split(tagVal, ",")[0]
 			if jsonName != "" && jsonName != "-" {
+				source = ts.source
 				break
 			}
 			jsonName = ""
@@ -367,7 +403,7 @@ func (v *Validate) resolveJSONNameAndType(current reflect.Type, name, indexSuffi
 	}
 
 	nextType := dereferenceType(field.Type)
-	return jsonName, unwrapIndexedType(nextType, indexSuffix)
+	return jsonName, unwrapIndexedType(nextType, indexSuffix), source
 }
 
 // dereferenceType unwraps successive pointer indirections, returning the underlying element type.

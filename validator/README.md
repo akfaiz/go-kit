@@ -3,8 +3,9 @@
 Wraps [go-playground/validator](https://github.com/go-playground/validator) with:
 
 - Translated messages (English out of the box)
-- Field names resolved from `label`, then `json`/`query`/`param`/`form` tags
+- Field names resolved from `label`, then `json`/`query`/`param`/`form`/`header` tags
 - Field paths reported using JSON keys (including nested structs and slice indices)
+- Each `FieldError` reports its `Source` (body, query, param, form, or header)
 
 ## Usage
 
@@ -78,13 +79,42 @@ is left unset).
 
 ```go
 v := validator.New(validator.Config{
-	CustomLabelTag: "name",
-	CustomJSONTag:  "json",
-	CustomQueryTag: "query",
-	CustomParamTag: "param",
-	CustomFormTag:  "form",
+	CustomLabelTag:  "name",
+	CustomJSONTag:   "json",
+	CustomQueryTag:  "query",
+	CustomParamTag:  "param",
+	CustomFormTag:   "form",
+	CustomHeaderTag: "header",
 })
 ```
+
+## Header validation
+
+Fields tagged with `header` (or `Config.CustomHeaderTag`) are validated the same as
+`json`/`query`/`param`/`form` fields:
+
+```go
+type ListRequest struct {
+	Authorization string `header:"Authorization" validate:"required" label:"Authorization"`
+	Page          int    `query:"page" validate:"required,min=1" label:"Page"`
+}
+```
+
+## Field source
+
+Every `FieldError` reports which part of the request its `Field` came from, via
+`Source` — one of `SourceBody` (default), `SourceQuery`, `SourceParam`, `SourceForm`,
+or `SourceHeader` — determined by whichever tag resolved that field's name:
+
+```go
+for _, fieldErr := range *vErr {
+	fmt.Println(fieldErr.Field, fieldErr.Source, fieldErr.Message)
+	// authorization header Authorization is a required field
+}
+```
+
+`Source` is empty (`""`) for `FieldError` values built manually via `NewError`,
+`NewErrors`, `Add`, or `Addf`.
 
 ## Field path format
 
@@ -114,3 +144,5 @@ validation fails:
 | `(*ValidationError) Messages() []string` | All messages |
 | `(ValidationError) Error() string` | Implements `error` |
 | `(ValidationError) Errors() []FieldError` | Underlying slice |
+
+`FieldError.Source` is one of: `SourceBody`, `SourceQuery`, `SourceParam`, `SourceForm`, `SourceHeader`.
