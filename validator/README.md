@@ -3,9 +3,10 @@
 Wraps [go-playground/validator](https://github.com/go-playground/validator) with:
 
 - Translated messages (English out of the box)
-- Field names resolved from `label`, then `json`/`query`/`param`/`form`/`header` tags
+- Field names resolved from `json`/`query`/`param`/`form`/`header` tags
 - Field paths reported using JSON keys (including nested structs and slice indices)
 - Each `FieldError` reports its `Source` (body, query, param, form, or header)
+- Custom per-field messages and display names via `Messages()`/`Attributes()` methods
 
 ## Usage
 
@@ -13,8 +14,8 @@ Wraps [go-playground/validator](https://github.com/go-playground/validator) with
 import "github.com/akfaiz/go-kit/validator"
 
 type RegisterRequest struct {
-	Email    string `json:"email" validate:"required,email" label:"Email"`
-	Password string `json:"password" validate:"required,min=8" label:"Password"`
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,min=8"`
 }
 
 v := validator.New()
@@ -25,7 +26,7 @@ var vErr *validator.ValidationError
 if errors.As(err, &vErr) {
 	for _, fieldErr := range *vErr {
 		fmt.Println(fieldErr.Field, fieldErr.Message)
-		// email Email must be a valid email address
+		// email email must be a valid email address
 	}
 }
 ```
@@ -78,7 +79,6 @@ when `WithLocales` is unset).
 
 ```go
 v := validator.New(
-	validator.WithLabelTag("name"),
 	validator.WithJSONTag("json"),
 	validator.WithQueryTag("query"),
 	validator.WithParamTag("param"),
@@ -87,6 +87,41 @@ v := validator.New(
 )
 ```
 
+## Custom messages and attributes
+
+A validated value can implement `MessagesProvider` and/or `AttributesProvider` to override
+error text without touching struct tags — similar to Laravel's `FormRequest::messages()`/
+`FormRequest::attributes()`. Both are checked on the top-level value passed to
+`Validate`/`ValidateContext`:
+
+```go
+type CreatePostRequest struct {
+	Title string `json:"title" validate:"required"`
+	Body  string `json:"body" validate:"required"`
+}
+
+// Messages overrides the translated message for a specific "<field>.<rule>" combination.
+func (r CreatePostRequest) Messages() map[string]string {
+	return map[string]string{
+		"title.required": "A title is required",
+		"body.required":  "A message is required",
+	}
+}
+
+// Attributes overrides the display name substituted into the default translated message.
+func (r CreatePostRequest) Attributes() map[string]string {
+	return map[string]string{
+		"email": "email address",
+	}
+}
+```
+
+Keys use the same dot-notation field path reported in `FieldError.Field` (independent of
+`WithFieldPathFormat`), with `"*"` standing in for any slice/array index — e.g.
+`"phones.*.number.required"` matches the `required` rule on every element of a `Phones` slice.
+A `Messages()` entry wins outright for that field/rule; an `Attributes()` entry only replaces
+the field's display name inside the default translated text.
+
 ## Header validation
 
 Fields tagged with `header` (or `WithHeaderTag`) are validated the same as
@@ -94,8 +129,8 @@ Fields tagged with `header` (or `WithHeaderTag`) are validated the same as
 
 ```go
 type ListRequest struct {
-	Authorization string `header:"Authorization" validate:"required" label:"Authorization"`
-	Page          int    `query:"page" validate:"required,min=1" label:"Page"`
+	Authorization string `header:"Authorization" validate:"required"`
+	Page          int    `query:"page" validate:"required,min=1"`
 }
 ```
 
@@ -132,7 +167,6 @@ v := validator.New(validator.WithFieldPathFormat(validator.FieldPathJSONPointer)
 | Option | Description |
 | --- | --- |
 | `WithContextExtractor(ContextExtractor)` | Resolve the active locale from a `context.Context` |
-| `WithLabelTag(string)` | Override the label tag (default `"label"`) |
 | `WithJSONTag(string)` | Override the JSON tag (default `"json"`) |
 | `WithQueryTag(string)` | Override the query tag (default `"query"`) |
 | `WithParamTag(string)` | Override the path param tag (default `"param"`) |

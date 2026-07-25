@@ -12,9 +12,9 @@ import (
 )
 
 type registerRequest struct {
-	Email                string `json:"email" validate:"required,email" label:"Email"`
-	Password             string `json:"password" validate:"required,min=8" label:"Password"`
-	PasswordConfirmation string `json:"password_confirmation" validate:"required,eqfield=Password" label:"Confirm Password"`
+	Email                string `json:"email" validate:"required,email"`
+	Password             string `json:"password" validate:"required,min=8"`
+	PasswordConfirmation string `json:"password_confirmation" validate:"required,eqfield=Password"`
 }
 
 type nestedProfileRequest struct {
@@ -22,46 +22,46 @@ type nestedProfileRequest struct {
 }
 
 type nestedProfile struct {
-	Street string `json:"street" validate:"required" label:"Street"`
+	Street string `json:"street" validate:"required"`
 }
 
 type stringArrayRequest struct {
-	Tags []string `json:"tags" validate:"required,dive,required" label:"Tags"`
+	Tags []string `json:"tags" validate:"required,dive,required"`
 }
 
 type arrayStructRequest struct {
-	Phones []phone `json:"phones" validate:"required,dive" label:"Phones"`
+	Phones []phone `json:"phones" validate:"required,dive"`
 }
 
 type phone struct {
-	Number string `json:"number" validate:"required" label:"Number"`
+	Number string `json:"number" validate:"required"`
 }
 
 type queryRequest struct {
-	Page int `query:"page" validate:"required,min=1" label:"Page"`
+	Page int `query:"page" validate:"required,min=1"`
 }
 
 type paramRequest struct {
-	ID string `param:"id" validate:"required" label:"ID"`
+	ID string `param:"id" validate:"required"`
 }
 
 type formRequest struct {
-	Name string `form:"name" validate:"required" label:"Name"`
+	Name string `form:"name" validate:"required"`
 }
 
 type headerRequest struct {
-	Authorization string `header:"Authorization" validate:"required" label:"Authorization"`
+	Authorization string `header:"Authorization" validate:"required"`
 }
 
 type mixedSourceRequest struct {
-	Page          int           `query:"page" validate:"required,min=1" label:"Page"`
-	ID            string        `param:"id" validate:"required" label:"ID"`
-	Authorization string        `header:"Authorization" validate:"required" label:"Authorization"`
+	Page          int           `query:"page" validate:"required,min=1"`
+	ID            string        `param:"id" validate:"required"`
+	Authorization string        `header:"Authorization" validate:"required"`
 	Profile       nestedProfile `json:"profile"`
 }
 
 type priorityRequest struct {
-	Field string `json:"json_field" query:"query_field" validate:"required" label:"Label Field"`
+	Field string `json:"json_field" query:"query_field" validate:"required"`
 }
 
 func TestValidate_Success(t *testing.T) {
@@ -94,12 +94,25 @@ func TestValidate_ReturnsValidationErrorWithJSONFieldAndTranslatedMessage(t *tes
 	first := vErr.First()
 	require.NotNil(t, first)
 	assert.Equal(t, "email", first.Field)
-	assert.Equal(t, "Email must be a valid email address", first.Message)
+	assert.Equal(t, "email must be a valid email address", first.Message)
 }
 
-func TestValidate_UsesLabelInMessageAndJSONFieldKey(t *testing.T) {
+type registerRequestWithAttributes struct {
+	Email                string `json:"email" validate:"required,email"`
+	Password             string `json:"password" validate:"required,min=8"`
+	PasswordConfirmation string `json:"password_confirmation" validate:"required,eqfield=Password"`
+}
+
+func (registerRequestWithAttributes) Attributes() map[string]string {
+	return map[string]string{
+		"password":              "Password",
+		"password_confirmation": "Confirm Password",
+	}
+}
+
+func TestValidate_AttributesProviderOverridesFieldNameInMessage(t *testing.T) {
 	v := validator.New()
-	req := &registerRequest{
+	req := &registerRequestWithAttributes{
 		Email:                "john.doe@example.com",
 		Password:             "",
 		PasswordConfirmation: "",
@@ -120,6 +133,67 @@ func TestValidate_UsesLabelInMessageAndJSONFieldKey(t *testing.T) {
 	assert.Equal(t, "Confirm Password is a required field", found["password_confirmation"])
 }
 
+type createPostRequest struct {
+	Title string `json:"title" validate:"required"`
+	Body  string `json:"body" validate:"required"`
+}
+
+func (createPostRequest) Messages() map[string]string {
+	return map[string]string{
+		"title.required": "A title is required",
+		"body.required":  "A message is required",
+	}
+}
+
+func TestValidate_MessagesProviderOverridesTranslatedMessage(t *testing.T) {
+	v := validator.New()
+	req := &createPostRequest{}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr, "expected *ValidationError, got %T", err)
+
+	found := map[string]string{}
+	for _, fieldErr := range *vErr {
+		found[fieldErr.Field] = fieldErr.Message
+	}
+
+	assert.Equal(t, "A title is required", found["title"])
+	assert.Equal(t, "A message is required", found["body"])
+}
+
+type arrayStructRequestWithMessages struct {
+	Phones []phone `json:"phones" validate:"required,dive"`
+}
+
+func (arrayStructRequestWithMessages) Messages() map[string]string {
+	return map[string]string{
+		"phones.*.number.required": "Every phone needs a number",
+	}
+}
+
+func TestValidate_MessagesProviderSupportsWildcardArrayKey(t *testing.T) {
+	v := validator.New()
+	req := &arrayStructRequestWithMessages{
+		Phones: []phone{
+			{Number: ""},
+			{Number: ""},
+		},
+	}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr, "expected *ValidationError, got %T", err)
+	require.Len(t, *vErr, 2)
+
+	assert.Equal(t, "Every phone needs a number", (*vErr)[0].Message)
+	assert.Equal(t, "Every phone needs a number", (*vErr)[1].Message)
+}
+
 func TestValidate_NestedStructPathUsesJSONKeys(t *testing.T) {
 	v := validator.New()
 	req := &nestedProfileRequest{
@@ -136,7 +210,7 @@ func TestValidate_NestedStructPathUsesJSONKeys(t *testing.T) {
 	require.NotNil(t, vErr.First())
 
 	assert.Equal(t, "profile.street", vErr.First().Field)
-	assert.Equal(t, "Street is a required field", vErr.First().Message)
+	assert.Equal(t, "street is a required field", vErr.First().Message)
 }
 
 func TestValidate_ArrayPathUsesJSONKeysWithIndex(t *testing.T) {
@@ -153,7 +227,7 @@ func TestValidate_ArrayPathUsesJSONKeysWithIndex(t *testing.T) {
 	require.NotNil(t, vErr.First())
 
 	assert.Equal(t, "tags[0]", vErr.First().Field)
-	assert.Equal(t, "Tags[0] is a required field", vErr.First().Message)
+	assert.Equal(t, "tags[0] is a required field", vErr.First().Message)
 }
 
 func TestValidate_ArrayStructPathUsesJSONKeysWithIndex(t *testing.T) {
@@ -172,7 +246,7 @@ func TestValidate_ArrayStructPathUsesJSONKeysWithIndex(t *testing.T) {
 	require.NotNil(t, vErr.First())
 
 	assert.Equal(t, "phones[0].number", vErr.First().Field)
-	assert.Equal(t, "Number is a required field", vErr.First().Message)
+	assert.Equal(t, "number is a required field", vErr.First().Message)
 }
 
 func TestValidate_ArrayStructPathReportsErrorPerElement(t *testing.T) {
@@ -268,7 +342,7 @@ func TestValidate_SupportsCustomLocales(t *testing.T) {
 	var vErr *validator.ValidationError
 	require.ErrorAs(t, err, &vErr)
 	assert.Equal(t, "name", vErr.First().Field)
-	assert.Equal(t, "Name est un champ obligatoire", vErr.First().Message)
+	assert.Equal(t, "name est un champ obligatoire", vErr.First().Message)
 }
 
 func TestValidate_UnsupportedLocaleFallsBackToDefault(t *testing.T) {
@@ -282,7 +356,7 @@ func TestValidate_UnsupportedLocaleFallsBackToDefault(t *testing.T) {
 
 	var vErr *validator.ValidationError
 	require.ErrorAs(t, err, &vErr)
-	assert.Equal(t, "Name is a required field", vErr.First().Message)
+	assert.Equal(t, "name is a required field", vErr.First().Message)
 }
 
 func TestValidate_SupportsQueryTags(t *testing.T) {
@@ -295,7 +369,7 @@ func TestValidate_SupportsQueryTags(t *testing.T) {
 	var vErr *validator.ValidationError
 	require.ErrorAs(t, err, &vErr)
 	assert.Equal(t, "page", vErr.First().Field)
-	assert.Equal(t, "Page is a required field", vErr.First().Message)
+	assert.Equal(t, "page is a required field", vErr.First().Message)
 }
 
 func TestValidate_SupportsParamTags(t *testing.T) {
@@ -308,7 +382,7 @@ func TestValidate_SupportsParamTags(t *testing.T) {
 	var vErr *validator.ValidationError
 	require.ErrorAs(t, err, &vErr)
 	assert.Equal(t, "id", vErr.First().Field)
-	assert.Equal(t, "ID is a required field", vErr.First().Message)
+	assert.Equal(t, "id is a required field", vErr.First().Message)
 }
 
 func TestValidate_SupportsFormTags(t *testing.T) {
@@ -321,7 +395,7 @@ func TestValidate_SupportsFormTags(t *testing.T) {
 	var vErr *validator.ValidationError
 	require.ErrorAs(t, err, &vErr)
 	assert.Equal(t, "name", vErr.First().Field)
-	assert.Equal(t, "Name is a required field", vErr.First().Message)
+	assert.Equal(t, "name is a required field", vErr.First().Message)
 }
 
 func TestValidate_SupportsHeaderTags(t *testing.T) {
@@ -376,15 +450,16 @@ func TestValidate_TagPriority(t *testing.T) {
 	assert.Equal(t, "json_field", vErr.First().Field)
 }
 
-func TestValidate_CustomTags(t *testing.T) {
-	type customTagRequest struct {
-		Name string `custom_json:"full_name" custom_label:"Full Name" validate:"required"`
-	}
+type customTagRequest struct {
+	Name string `custom_json:"full_name" validate:"required"`
+}
 
-	v := validator.New(
-		validator.WithJSONTag("custom_json"),
-		validator.WithLabelTag("custom_label"),
-	)
+func (customTagRequest) Attributes() map[string]string {
+	return map[string]string{"full_name": "Full Name"}
+}
+
+func TestValidate_CustomTags(t *testing.T) {
+	v := validator.New(validator.WithJSONTag("custom_json"))
 	req := &customTagRequest{Name: ""}
 
 	err := v.Validate(req)
@@ -398,7 +473,7 @@ func TestValidate_CustomTags(t *testing.T) {
 
 func TestValidate_CustomHeaderTag(t *testing.T) {
 	type customHeaderRequest struct {
-		Auth string `custom_header:"Authorization" validate:"required" label:"Authorization"`
+		Auth string `custom_header:"Authorization" validate:"required"`
 	}
 
 	v := validator.New(validator.WithHeaderTag("custom_header"))

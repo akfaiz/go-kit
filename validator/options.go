@@ -6,7 +6,6 @@ type Option func(*options)
 // options holds the settings assembled from the Option values passed to New.
 type options struct {
 	contextExtractor ContextExtractor
-	labelTag         string
 	jsonTag          string
 	queryTag         string
 	paramTag         string
@@ -21,11 +20,6 @@ type options struct {
 // from a context.Context. Without this option, ValidateContext always uses the default locale.
 func WithContextExtractor(fn ContextExtractor) Option {
 	return func(o *options) { o.contextExtractor = fn }
-}
-
-// WithLabelTag overrides the struct tag used for the human-readable field name. Defaults to "label".
-func WithLabelTag(tag string) Option {
-	return func(o *options) { o.labelTag = tag }
 }
 
 // WithJSONTag overrides the struct tag used to resolve the JSON field name. Defaults to "json".

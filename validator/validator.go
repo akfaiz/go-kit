@@ -62,11 +62,10 @@ const (
 
 // New creates a new Validate instance with custom tag name resolution and registered locale
 // translations, configured via Option values (e.g. WithLocales, WithFieldPathFormat). With no
-// options, it resolves field names from the "label", "json", "query", "param", "form", and
-// "header" tags (in that order) and supports only the English ("en") locale.
+// options, it resolves field names from the "json", "query", "param", "form", and "header"
+// tags (in that order) and supports only the English ("en") locale.
 func New(opts ...Option) *Validate {
 	o := &options{
-		labelTag:  "label",
 		jsonTag:   "json",
 		queryTag:  "query",
 		paramTag:  "param",
@@ -89,9 +88,6 @@ func New(opts ...Option) *Validate {
 	v := govalidator.New()
 
 	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
-		if label := fld.Tag.Get(o.labelTag); label != "" {
-			return label
-		}
 		for _, tag := range []string{o.jsonTag, o.queryTag, o.paramTag, o.formTag, o.headerTag} {
 			if name := fld.Tag.Get(tag); name != "" {
 				name = strings.Split(name, ",")[0]
@@ -167,18 +163,35 @@ func (v *Validate) ValidateContext(ctx context.Context, i any) error {
 
 	trans := v.getTranslator(ctx)
 
+	var msgs, attrs map[string]string
+	if mp, ok := i.(MessagesProvider); ok {
+		msgs = mp.Messages()
+	}
+	if ap, ok := i.(AttributesProvider); ok {
+		attrs = ap.Attributes()
+	}
+
 	seenFields := make(map[string]struct{}, len(validationErrors))
 	fieldErrors := make([]FieldError, 0, len(validationErrors))
 	for _, fieldErr := range validationErrors {
-		field, source := v.jsonFieldPath(i, fieldErr.StructNamespace(), fieldErr.StructField())
+		field, source, keyPath := v.jsonFieldPath(i, fieldErr.StructNamespace(), fieldErr.StructField())
 		if _, seen := seenFields[field]; seen {
 			continue
 		}
 		seenFields[field] = struct{}{}
 
+		message := fieldErr.Translate(trans)
+		if custom, ok := msgs[keyPath+"."+fieldErr.Tag()]; ok {
+			message = custom
+		} else if attr, ok := attrs[keyPath]; ok {
+			if leaf := fieldErr.Field(); leaf != "" {
+				message = strings.Replace(message, leaf, attr, 1)
+			}
+		}
+
 		fieldErrors = append(fieldErrors, FieldError{
 			Field:   field,
-			Message: fieldErr.Translate(trans),
+			Message: message,
 			Source:  source,
 		})
 	}
@@ -198,34 +211,36 @@ type pathSegment struct {
 // for FieldPathDot or "/phones/0/number" for FieldPathJSONPointer), by walking i's type alongside
 // the namespace. It falls back to fallback, formatted the same way, if i's type can't be walked or
 // the namespace resolves empty. The returned Source reflects which tag (json/query/param/form/header)
-// resolved the path's root field, defaulting to SourceBody when none matched.
-func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (string, Source) {
+// resolved the path's root field, defaulting to SourceBody when none matched. The third result is a
+// message key: the same path in dot notation with "*" for every index, used to look up
+// MessagesProvider/AttributesProvider overrides independent of v.fieldPathFormat.
+func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (string, Source, string) {
 	fallbackSegments := []pathSegment{{value: fallback}}
 
 	if structNamespace == "" {
-		return v.formatPath(fallbackSegments), SourceBody
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
 	}
 
 	t := reflect.TypeOf(i)
 	if t == nil {
-		return v.formatPath(fallbackSegments), SourceBody
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
 	}
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		return v.formatPath(fallbackSegments), SourceBody
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
 	}
 
 	parts := strings.Split(structNamespace, ".")
 	if len(parts) == 0 {
-		return v.formatPath(fallbackSegments), SourceBody
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
 	}
 
 	// Skip the root struct name in namespace.
 	parts = parts[1:]
 	if len(parts) == 0 {
-		return v.formatPath(fallbackSegments), SourceBody
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
 	}
 
 	segments := make([]pathSegment, 0, len(parts))
@@ -252,10 +267,27 @@ func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (strin
 	}
 
 	if len(segments) == 0 {
-		return v.formatPath(fallbackSegments), SourceBody
+		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments)
 	}
 
-	return v.formatPath(segments), source
+	return v.formatPath(segments), source, formatMessageKey(segments)
+}
+
+// formatMessageKey renders segments as a dot path with "*" standing in for slice/array indices,
+// independent of v.fieldPathFormat, used to key MessagesProvider and AttributesProvider maps.
+func formatMessageKey(segments []pathSegment) string {
+	var b strings.Builder
+	for i, seg := range segments {
+		if seg.isIndex {
+			b.WriteString(".*")
+			continue
+		}
+		if i > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(seg.value)
+	}
+	return b.String()
 }
 
 // formatPath renders segments per v.fieldPathFormat.
