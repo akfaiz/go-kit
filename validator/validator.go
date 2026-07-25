@@ -39,33 +39,7 @@ type Locale struct {
 	RegisterTranslations func(v *govalidator.Validate, trans ut.Translator) error
 }
 
-// Config customizes tag name resolution, locale support, and i18n behavior for New.
-type Config struct {
-	// ContextExtractor resolves the active locale from a context.Context. If unset, ValidateContext
-	// always uses DefaultLocale.
-	ContextExtractor ContextExtractor
-	// CustomLabelTag overrides the struct tag used for the human-readable field name. Defaults to "label".
-	CustomLabelTag string
-	// CustomJSONTag overrides the struct tag used to resolve the JSON field name. Defaults to "json".
-	CustomJSONTag string
-	// CustomQueryTag overrides the struct tag used to resolve the query field name. Defaults to "query".
-	CustomQueryTag string
-	// CustomParamTag overrides the struct tag used to resolve the path param field name. Defaults to "param".
-	CustomParamTag string
-	// CustomFormTag overrides the struct tag used to resolve the form field name. Defaults to "form".
-	CustomFormTag string
-	// CustomHeaderTag overrides the struct tag used to resolve the header field name. Defaults to "header".
-	CustomHeaderTag string
-	// Locales overrides the set of supported locales. Defaults to English ("en") only.
-	Locales []Locale
-	// DefaultLocale is used when the context extractor is unset, returns ok=false, or resolves to an
-	// unsupported locale. Defaults to the first entry in Locales (or "en" when Locales is unset).
-	DefaultLocale string
-	// FieldPathFormat controls how FieldError.Field values are rendered. Defaults to FieldPathDot.
-	FieldPathFormat FieldPathFormat
-}
-
-// defaultLocales returns the built-in English locale used when Config.Locales is unset.
+// defaultLocales returns the built-in English locale used when no locales are configured via WithLocales.
 func defaultLocales() []Locale {
 	return []Locale{
 		{Tag: "en", Translator: en.New(), RegisterTranslations: enTranslations.RegisterDefaultTranslations},
@@ -86,60 +60,39 @@ const (
 	FieldPathJSONPointer
 )
 
-// New creates a new Validate instance with custom tag name resolution and registered locale translations.
-// With no Config, it resolves field names from the "label", "json", "query", "param", "form", and
+// New creates a new Validate instance with custom tag name resolution and registered locale
+// translations, configured via Option values (e.g. WithLocales, WithFieldPathFormat). With no
+// options, it resolves field names from the "label", "json", "query", "param", "form", and
 // "header" tags (in that order) and supports only the English ("en") locale.
-func New(cfg ...Config) *Validate {
-	v := govalidator.New()
-
-	labelTag := "label"
-	jsonTag := "json"
-	queryTag := "query"
-	paramTag := "param"
-	formTag := "form"
-	headerTag := "header"
-	var contextExtractor ContextExtractor
-	var customLocales []Locale
-	var defaultLocale string
-	var fieldPathFormat FieldPathFormat
-	if len(cfg) > 0 {
-		if cfg[0].CustomLabelTag != "" {
-			labelTag = cfg[0].CustomLabelTag
-		}
-		if cfg[0].CustomJSONTag != "" {
-			jsonTag = cfg[0].CustomJSONTag
-		}
-		if cfg[0].CustomQueryTag != "" {
-			queryTag = cfg[0].CustomQueryTag
-		}
-		if cfg[0].CustomParamTag != "" {
-			paramTag = cfg[0].CustomParamTag
-		}
-		if cfg[0].CustomFormTag != "" {
-			formTag = cfg[0].CustomFormTag
-		}
-		if cfg[0].CustomHeaderTag != "" {
-			headerTag = cfg[0].CustomHeaderTag
-		}
-		if cfg[0].ContextExtractor != nil {
-			contextExtractor = cfg[0].ContextExtractor
-		}
-		customLocales = cfg[0].Locales
-		defaultLocale = cfg[0].DefaultLocale
-		fieldPathFormat = cfg[0].FieldPathFormat
+func New(opts ...Option) *Validate {
+	o := &options{
+		labelTag:  "label",
+		jsonTag:   "json",
+		queryTag:  "query",
+		paramTag:  "param",
+		formTag:   "form",
+		headerTag: "header",
 	}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	customLocales := o.locales
 	if len(customLocales) == 0 {
 		customLocales = defaultLocales()
 	}
+	defaultLocale := o.defaultLocale
 	if defaultLocale == "" {
 		defaultLocale = customLocales[0].Tag
 	}
 
+	v := govalidator.New()
+
 	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
-		if label := fld.Tag.Get(labelTag); label != "" {
+		if label := fld.Tag.Get(o.labelTag); label != "" {
 			return label
 		}
-		for _, tag := range []string{jsonTag, queryTag, paramTag, formTag, headerTag} {
+		for _, tag := range []string{o.jsonTag, o.queryTag, o.paramTag, o.formTag, o.headerTag} {
 			if name := fld.Tag.Get(tag); name != "" {
 				name = strings.Split(name, ",")[0]
 				if name != "" && name != "-" {
@@ -167,14 +120,14 @@ func New(cfg ...Config) *Validate {
 	return &Validate{
 		validate:         v,
 		uni:              uni,
-		contextExtractor: contextExtractor,
+		contextExtractor: o.contextExtractor,
 		defaultLocale:    defaultLocale,
-		fieldPathFormat:  fieldPathFormat,
-		jsonTag:          jsonTag,
-		queryTag:         queryTag,
-		paramTag:         paramTag,
-		formTag:          formTag,
-		headerTag:        headerTag,
+		fieldPathFormat:  o.fieldPathFormat,
+		jsonTag:          o.jsonTag,
+		queryTag:         o.queryTag,
+		paramTag:         o.paramTag,
+		formTag:          o.formTag,
+		headerTag:        o.headerTag,
 	}
 }
 

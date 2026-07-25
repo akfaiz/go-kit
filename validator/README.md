@@ -32,26 +32,25 @@ if errors.As(err, &vErr) {
 
 ## Locale support
 
-Pass a `ContextExtractor` to resolve the locale per request and call
+Pass `WithContextExtractor` to resolve the locale per request and call
 `ValidateContext` instead of `Validate`:
 
 ```go
-v := validator.New(validator.Config{
-	ContextExtractor: func(ctx context.Context) (string, bool) {
+v := validator.New(
+	validator.WithContextExtractor(func(ctx context.Context) (string, bool) {
 		locale, ok := ctx.Value(localeKey{}).(string)
 		return locale, ok
-	},
-})
+	}),
+)
 
 err := v.ValidateContext(ctx, req)
 ```
 
 ## Custom locales
 
-Only English is registered by default. Add or replace supported
-locales with `Config.Locales`, using any `github.com/go-playground/locales/<lang>`
-translator paired with its matching `github.com/go-playground/validator/v10/translations/<lang>`
-package:
+Only English is registered by default. Add or replace supported locales with
+`WithLocales`, using any `github.com/go-playground/locales/<lang>` translator paired
+with its matching `github.com/go-playground/validator/v10/translations/<lang>` package:
 
 ```go
 import (
@@ -59,38 +58,38 @@ import (
 	frTranslations "github.com/go-playground/validator/v10/translations/fr"
 )
 
-v := validator.New(validator.Config{
-	Locales: []validator.Locale{
-		{Tag: "en", Translator: en.New(), RegisterTranslations: enTranslations.RegisterDefaultTranslations},
-		{Tag: "fr", Translator: fr.New(), RegisterTranslations: frTranslations.RegisterDefaultTranslations},
-	},
-	DefaultLocale: "en", // used when ContextExtractor is unset or resolves to an unsupported locale
-	ContextExtractor: func(ctx context.Context) (string, bool) {
+v := validator.New(
+	validator.WithLocales(
+		validator.Locale{Tag: "en", Translator: en.New(), RegisterTranslations: enTranslations.RegisterDefaultTranslations},
+		validator.Locale{Tag: "fr", Translator: fr.New(), RegisterTranslations: frTranslations.RegisterDefaultTranslations},
+	),
+	validator.WithDefaultLocale("en"), // used when the context extractor is unset or resolves to an unsupported locale
+	validator.WithContextExtractor(func(ctx context.Context) (string, bool) {
 		locale, ok := ctx.Value(localeKey{}).(string)
 		return locale, ok
-	},
-})
+	}),
+)
 ```
 
-`DefaultLocale` defaults to the first entry in `Locales` (or `"en"` when `Locales`
-is left unset).
+`WithDefaultLocale` defaults to the first locale passed to `WithLocales` (or `"en"`
+when `WithLocales` is unset).
 
 ## Custom tags
 
 ```go
-v := validator.New(validator.Config{
-	CustomLabelTag:  "name",
-	CustomJSONTag:   "json",
-	CustomQueryTag:  "query",
-	CustomParamTag:  "param",
-	CustomFormTag:   "form",
-	CustomHeaderTag: "header",
-})
+v := validator.New(
+	validator.WithLabelTag("name"),
+	validator.WithJSONTag("json"),
+	validator.WithQueryTag("query"),
+	validator.WithParamTag("param"),
+	validator.WithFormTag("form"),
+	validator.WithHeaderTag("header"),
+)
 ```
 
 ## Header validation
 
-Fields tagged with `header` (or `Config.CustomHeaderTag`) are validated the same as
+Fields tagged with `header` (or `WithHeaderTag`) are validated the same as
 `json`/`query`/`param`/`form` fields:
 
 ```go
@@ -119,14 +118,29 @@ for _, fieldErr := range *vErr {
 ## Field path format
 
 `FieldError.Field` defaults to dot notation (`FieldPathDot`), e.g. `"phones[0].number"`.
-Set `Config.FieldPathFormat` to render paths as [RFC 6901](https://datatracker.ietf.org/doc/html/rfc6901)
+Pass `WithFieldPathFormat` to render paths as [RFC 6901](https://datatracker.ietf.org/doc/html/rfc6901)
 JSON Pointers instead, e.g. `"/phones/0/number"`:
 
 ```go
-v := validator.New(validator.Config{
-	FieldPathFormat: validator.FieldPathJSONPointer,
-})
+v := validator.New(validator.WithFieldPathFormat(validator.FieldPathJSONPointer))
 ```
+
+## `Option`
+
+`New(opts ...Option)` is configured via functional options:
+
+| Option | Description |
+| --- | --- |
+| `WithContextExtractor(ContextExtractor)` | Resolve the active locale from a `context.Context` |
+| `WithLabelTag(string)` | Override the label tag (default `"label"`) |
+| `WithJSONTag(string)` | Override the JSON tag (default `"json"`) |
+| `WithQueryTag(string)` | Override the query tag (default `"query"`) |
+| `WithParamTag(string)` | Override the path param tag (default `"param"`) |
+| `WithFormTag(string)` | Override the form tag (default `"form"`) |
+| `WithHeaderTag(string)` | Override the header tag (default `"header"`) |
+| `WithLocales(...Locale)` | Override the set of supported locales |
+| `WithDefaultLocale(string)` | Override the fallback locale |
+| `WithFieldPathFormat(FieldPathFormat)` | Override `FieldError.Field` rendering |
 
 ## `ValidationError`
 

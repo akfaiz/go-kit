@@ -200,9 +200,7 @@ type localeKeyType struct{}
 var localeKey = localeKeyType{}
 
 func TestValidate_JSONPointerFieldPathFormat(t *testing.T) {
-	v := validator.New(validator.Config{
-		FieldPathFormat: validator.FieldPathJSONPointer,
-	})
+	v := validator.New(validator.WithFieldPathFormat(validator.FieldPathJSONPointer))
 
 	t.Run("nested struct", func(t *testing.T) {
 		req := &nestedProfileRequest{Profile: nestedProfile{Street: ""}}
@@ -252,15 +250,15 @@ func TestValidate_JSONPointerFieldPathFormat(t *testing.T) {
 }
 
 func TestValidate_SupportsCustomLocales(t *testing.T) {
-	v := validator.New(validator.Config{
-		Locales: []validator.Locale{
-			{Tag: "fr", Translator: fr.New(), RegisterTranslations: frTranslations.RegisterDefaultTranslations},
-		},
-		ContextExtractor: func(ctx context.Context) (string, bool) {
+	v := validator.New(
+		validator.WithLocales(
+			validator.Locale{Tag: "fr", Translator: fr.New(), RegisterTranslations: frTranslations.RegisterDefaultTranslations},
+		),
+		validator.WithContextExtractor(func(ctx context.Context) (string, bool) {
 			locale, ok := ctx.Value(localeKey).(string)
 			return locale, ok
-		},
-	})
+		}),
+	)
 	req := &formRequest{Name: ""}
 
 	ctx := context.WithValue(context.Background(), localeKey, "fr")
@@ -274,11 +272,9 @@ func TestValidate_SupportsCustomLocales(t *testing.T) {
 }
 
 func TestValidate_UnsupportedLocaleFallsBackToDefault(t *testing.T) {
-	v := validator.New(validator.Config{
-		ContextExtractor: func(ctx context.Context) (string, bool) {
-			return "zz", true
-		},
-	})
+	v := validator.New(validator.WithContextExtractor(func(ctx context.Context) (string, bool) {
+		return "zz", true
+	}))
 	req := &formRequest{Name: ""}
 
 	err := v.Validate(req)
@@ -378,4 +374,41 @@ func TestValidate_TagPriority(t *testing.T) {
 	var vErr *validator.ValidationError
 	require.ErrorAs(t, err, &vErr)
 	assert.Equal(t, "json_field", vErr.First().Field)
+}
+
+func TestValidate_CustomTags(t *testing.T) {
+	type customTagRequest struct {
+		Name string `custom_json:"full_name" custom_label:"Full Name" validate:"required"`
+	}
+
+	v := validator.New(
+		validator.WithJSONTag("custom_json"),
+		validator.WithLabelTag("custom_label"),
+	)
+	req := &customTagRequest{Name: ""}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "full_name", vErr.First().Field)
+	assert.Equal(t, "Full Name is a required field", vErr.First().Message)
+}
+
+func TestValidate_CustomHeaderTag(t *testing.T) {
+	type customHeaderRequest struct {
+		Auth string `custom_header:"Authorization" validate:"required" label:"Authorization"`
+	}
+
+	v := validator.New(validator.WithHeaderTag("custom_header"))
+	req := &customHeaderRequest{Auth: ""}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "Authorization", vErr.First().Field)
+	assert.Equal(t, validator.SourceHeader, vErr.First().Source)
 }
