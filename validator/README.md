@@ -3,7 +3,7 @@
 Wraps [go-playground/validator](https://github.com/go-playground/validator) with:
 
 - Translated messages (English out of the box)
-- Field names resolved from `json`/`query`/`param`/`form`/`header` tags
+- Field names resolved from `label`, then `json`/`query`/`param`/`form`/`header` tags
 - Field paths reported using JSON keys (including nested structs and slice indices)
 - Each `FieldError` reports its `Source` (body, query, param, form, or header)
 - Custom per-field messages and display names via `Messages()`/`Attributes()` methods
@@ -79,12 +79,23 @@ when `WithLocales` is unset).
 
 ```go
 v := validator.New(
+	validator.WithLabelTag("label"),
 	validator.WithJSONTag("json"),
 	validator.WithQueryTag("query"),
 	validator.WithParamTag("param"),
 	validator.WithFormTag("form"),
 	validator.WithHeaderTag("header"),
 )
+```
+
+A `label` tag always wins over the json/query/param/form/header tag chain for display purposes:
+
+```go
+type RegisterRequest struct {
+	Email string `json:"email" validate:"required,email" label:"Email Address"`
+}
+// fieldErr.Field  == "email" (still resolved from json/query/param/form/header)
+// fieldErr.Message == "Email Address is a required field"
 ```
 
 ## Custom messages and attributes
@@ -120,11 +131,14 @@ Keys use the same dot-notation field path reported in `FieldError.Field` (indepe
 `WithFieldPathFormat`), with `"*"` standing in for any slice/array index — e.g.
 `"phones.*.number.required"` matches the `required` rule on every element of a `Phones` slice.
 A `Messages()` entry wins outright for that field/rule; an `Attributes()` entry only replaces
-the field's display name inside the default translated text.
+the field's display name inside the default translated text — overriding the field's `label`
+tag if it has one.
 
 `Attributes()` also applies to the *other* field named in cross-field rules (`eqfield`,
 `gtfield`, `ltfield`, etc.) — e.g. `validate:"eqfield=PasswordConfirmation"` renders
-`PasswordConfirmation`'s own attribute, if one is set, instead of its raw struct field name.
+`PasswordConfirmation`'s own attribute or `label` tag, if either is set, instead of its raw
+struct field name. Precedence for that field's display text is `Attributes()` > `label` tag >
+json/query/param/form/header tag chain.
 
 ## Custom validation rules
 
@@ -145,9 +159,21 @@ type UsernameRequest struct {
 }
 ```
 
-`RegisterValidation` takes a `validator.Func` (an alias for `govalidator.Func`).
-`RegisterValidationCtx` takes a `validator.FuncCtx` instead, receiving the `context.Context`
-passed to `ValidateContext`.
+`RegisterValidation` takes a `govalidator.Func`. `RegisterValidationCtx` takes a
+`govalidator.FuncCtx` instead, receiving the `context.Context` passed to `ValidateContext`.
+
+`RegisterCustomTypeFunc` wraps `govalidator.Validate.RegisterCustomTypeFunc`, letting you teach
+the validator how to extract a comparable value from a custom type (e.g. a `sql.NullString`)
+before rules like `required`/`email`/`eqfield` run against it:
+
+```go
+v.RegisterCustomTypeFunc(func(field reflect.Value) any {
+	if ns, ok := field.Interface().(sql.NullString); ok && ns.Valid {
+		return ns.String
+	}
+	return nil
+}, sql.NullString{})
+```
 
 ## Header validation
 
@@ -194,6 +220,7 @@ v := validator.New(validator.WithFieldPathFormat(validator.FieldPathJSONPointer)
 | Option | Description |
 | --- | --- |
 | `WithContextExtractor(ContextExtractor)` | Resolve the active locale from a `context.Context` |
+| `WithLabelTag(string)` | Override the label tag (default `"label"`) |
 | `WithJSONTag(string)` | Override the JSON tag (default `"json"`) |
 | `WithQueryTag(string)` | Override the query tag (default `"query"`) |
 | `WithParamTag(string)` | Override the path param tag (default `"param"`) |

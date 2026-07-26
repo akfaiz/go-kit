@@ -2,6 +2,7 @@ package validator_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/akfaiz/go-kit/validator"
@@ -519,6 +520,108 @@ func TestValidate_RegisterValidationCtxReceivesContext(t *testing.T) {
 	var vErr *validator.ValidationError
 	require.ErrorAs(t, valErr, &vErr)
 	assert.Equal(t, "name", vErr.First().Field)
+}
+
+type meters struct {
+	Value float64
+}
+
+func TestValidate_RegisterCustomTypeFuncExtractsComparableValue(t *testing.T) {
+	type distanceRequest struct {
+		Distance meters `json:"distance" validate:"required,gt=0"`
+	}
+
+	v := validator.New()
+	v.RegisterCustomTypeFunc(func(field reflect.Value) any {
+		if m, ok := field.Interface().(meters); ok {
+			return m.Value
+		}
+		return nil
+	}, meters{})
+
+	valErr := v.Validate(&distanceRequest{Distance: meters{Value: 0}})
+	require.Error(t, valErr)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, valErr, &vErr)
+	assert.Equal(t, "distance", vErr.First().Field)
+
+	assert.NoError(t, v.Validate(&distanceRequest{Distance: meters{Value: 5}}))
+}
+
+func TestValidate_LabelTagOverridesFieldNameInMessage(t *testing.T) {
+	type labeledRequest struct {
+		Email string `json:"email" validate:"required,email" label:"Email Address"`
+	}
+
+	v := validator.New()
+	req := &labeledRequest{Email: ""}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "email", vErr.First().Field)
+	assert.Equal(t, "Email Address is a required field", vErr.First().Message)
+}
+
+type labeledRequestWithAttributes struct {
+	Email string `json:"email" validate:"required,email" label:"Email Address"`
+}
+
+func (labeledRequestWithAttributes) Attributes() map[string]string {
+	return map[string]string{"email": "E-mail"}
+}
+
+func TestValidate_AttributesProviderWinsOverLabelTag(t *testing.T) {
+	v := validator.New()
+	req := &labeledRequestWithAttributes{Email: ""}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "E-mail is a required field", vErr.First().Message)
+}
+
+type labeledCrossFieldRequest struct {
+	Password             string `json:"password" validate:"required,eqfield=PasswordConfirmation"`
+	PasswordConfirmation string `json:"password_confirmation" validate:"required" label:"Confirm Password"`
+}
+
+func TestValidate_LabelTagUsedForCrossFieldSiblingName(t *testing.T) {
+	v := validator.New()
+	req := &labeledCrossFieldRequest{Password: "secret", PasswordConfirmation: "different"}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "password must be equal to Confirm Password", vErr.First().Message)
+}
+
+type labeledCrossFieldRequestWithAttributes struct {
+	Password             string `json:"password" validate:"required,eqfield=PasswordConfirmation"`
+	PasswordConfirmation string `json:"password_confirmation" validate:"required" label:"Confirm Password"`
+}
+
+func (labeledCrossFieldRequestWithAttributes) Attributes() map[string]string {
+	return map[string]string{"password_confirmation": "New Password"}
+}
+
+func TestValidate_AttributesProviderWinsOverLabelTagForCrossFieldSibling(t *testing.T) {
+	v := validator.New()
+	req := &labeledCrossFieldRequestWithAttributes{Password: "secret", PasswordConfirmation: "different"}
+
+	err := v.Validate(req)
+	require.Error(t, err)
+
+	var vErr *validator.ValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "password must be equal to New Password", vErr.First().Message)
 }
 
 func TestValidate_CustomHeaderTag(t *testing.T) {

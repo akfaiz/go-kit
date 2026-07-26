@@ -20,6 +20,7 @@ type Validate struct {
 	contextExtractor ContextExtractor
 	defaultLocale    string
 	fieldPathFormat  FieldPathFormat
+	labelTag         string
 	jsonTag          string
 	queryTag         string
 	paramTag         string
@@ -62,10 +63,11 @@ const (
 
 // New creates a new Validate instance with custom tag name resolution and registered locale
 // translations, configured via Option values (e.g. WithLocales, WithFieldPathFormat). With no
-// options, it resolves field names from the "json", "query", "param", "form", and "header"
-// tags (in that order) and supports only the English ("en") locale.
+// options, it resolves field names from the "label" tag, then the "json", "query", "param",
+// "form", and "header" tags (in that order), and supports only the English ("en") locale.
 func New(opts ...Option) *Validate {
 	o := &options{
+		labelTag:  "label",
 		jsonTag:   "json",
 		queryTag:  "query",
 		paramTag:  "param",
@@ -88,6 +90,9 @@ func New(opts ...Option) *Validate {
 	v := govalidator.New()
 
 	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
+		if label := fld.Tag.Get(o.labelTag); label != "" {
+			return label
+		}
 		for _, tag := range []string{o.jsonTag, o.queryTag, o.paramTag, o.formTag, o.headerTag} {
 			if name := fld.Tag.Get(tag); name != "" {
 				name = strings.Split(name, ",")[0]
@@ -119,6 +124,7 @@ func New(opts ...Option) *Validate {
 		contextExtractor: o.contextExtractor,
 		defaultLocale:    defaultLocale,
 		fieldPathFormat:  o.fieldPathFormat,
+		labelTag:         o.labelTag,
 		jsonTag:          o.jsonTag,
 		queryTag:         o.queryTag,
 		paramTag:         o.paramTag,
@@ -144,6 +150,12 @@ func (v *Validate) RegisterValidation(tag string, fn govalidator.Func, callValid
 // functions that need access to the context.Context passed to ValidateContext.
 func (v *Validate) RegisterValidationCtx(tag string, fn govalidator.FuncCtx, callValidationEvenIfNull ...bool) error {
 	return v.validate.RegisterValidationCtx(tag, fn, callValidationEvenIfNull...)
+}
+
+// RegisterCustomTypeFunc registers fn to extract a comparable value from any of types before
+// validation rules run against it. It wraps govalidator.Validate.RegisterCustomTypeFunc directly.
+func (v *Validate) RegisterCustomTypeFunc(fn govalidator.CustomTypeFunc, types ...any) {
+	v.validate.RegisterCustomTypeFunc(fn, types...)
 }
 
 // getTranslator resolves the translator for the current request locale, falling back to
@@ -208,7 +220,7 @@ func (v *Validate) ValidateContext(ctx context.Context, i any) error {
 			// it the same way so AttributesProvider can override it too.
 			if param := fieldErr.Param(); param != "" && parentType != nil {
 				if paramName, _, _ := v.resolveJSONNameAndType(parentType, param, ""); paramName != "" {
-					replacement := paramName
+					replacement := v.resolveDisplayName(parentType, param, paramName)
 					if attr, ok := attrs[siblingMessageKey(keyPath, paramName)]; ok {
 						replacement = attr
 					}
@@ -432,6 +444,22 @@ func (v *Validate) resolveJSONNameAndType(current reflect.Type, name, indexSuffi
 
 	nextType := dereferenceType(field.Type)
 	return jsonName, unwrapIndexedType(nextType, indexSuffix), source
+}
+
+// resolveDisplayName resolves the display name for the struct field named name on parentType,
+// preferring its label tag (matching RegisterTagNameFunc's own priority) and falling back to
+// fallback (typically the json/query/param/form/header-resolved name) when no label is set or
+// the field can't be found.
+func (v *Validate) resolveDisplayName(parentType reflect.Type, name, fallback string) string {
+	parentType = dereferenceType(parentType)
+	if parentType.Kind() == reflect.Struct {
+		if field, ok := parentType.FieldByName(name); ok {
+			if label := field.Tag.Get(v.labelTag); label != "" {
+				return label
+			}
+		}
+	}
+	return fallback
 }
 
 // dereferenceType unwraps successive pointer indirections, returning the underlying element type.
