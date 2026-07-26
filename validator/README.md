@@ -213,6 +213,27 @@ JSON Pointers instead, e.g. `"/phones/0/number"`:
 v := validator.New(validator.WithFieldPathFormat(validator.FieldPathJSONPointer))
 ```
 
+## Performance
+
+`New` is relatively expensive (it builds the underlying `govalidator.Validate` and registers
+locale translations) — construct one `*Validate` and reuse it, e.g. as a package-level or
+injected singleton, rather than calling `New` per request. `*Validate` is safe for concurrent
+use.
+
+On the failure path, `Validate`/`ValidateContext` memoize their reflection-based field-path
+resolution per `(struct type, govalidator namespace)` in an internal cache that lives on the
+`*Validate` instance. Repeat validation failures on the same field of the same struct type —
+the common case for a shared, long-lived `Validate` — skip the reflect walk entirely after the
+first occurrence. The cache is never evicted, so a struct that fails validation across a very
+large number of distinct slice indices will grow it proportionally; this is a non-issue for
+ordinary request DTOs.
+
+Benchmarks live in `validator_bench_test.go`:
+
+```sh
+go test ./validator/... -run '^$' -bench . -benchmem
+```
+
 ## `Option`
 
 `New(opts ...Option)` is configured via functional options:

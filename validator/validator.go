@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/go-playground/locales"
 	"github.com/go-playground/locales/en"
@@ -26,6 +27,29 @@ type Validate struct {
 	paramTag         string
 	formTag          string
 	headerTag        string
+	// tagSources is precomputed once in New, in resolution priority order, so resolveTagName
+	// doesn't rebuild it on every field it resolves.
+	tagSources []tagSource
+	// pathCache memoizes jsonFieldPath's result per (struct type, govalidator namespace): both
+	// are fixed for a given struct schema, so repeat validation failures on the same field (the
+	// common case for a long-lived, shared Validate) skip the reflect walk entirely. Safe for
+	// concurrent use; never invalidated since entries are pure functions of the key.
+	pathCache sync.Map // map[pathCacheKey]cachedPath
+}
+
+// pathCacheKey identifies one jsonFieldPath resolution: a struct type plus the govalidator
+// namespace within it (e.g. "Req.Phones[0].Number").
+type pathCacheKey struct {
+	typ       reflect.Type
+	namespace string
+}
+
+// cachedPath is jsonFieldPath's resolved result for a pathCacheKey.
+type cachedPath struct {
+	field      string
+	source     Source
+	keyPath    string
+	parentType reflect.Type
 }
 
 // Locale registers a supported locale for translated validation messages.
@@ -130,6 +154,13 @@ func New(opts ...Option) *Validate {
 		paramTag:         o.paramTag,
 		formTag:          o.formTag,
 		headerTag:        o.headerTag,
+		tagSources: []tagSource{
+			{o.jsonTag, SourceBody},
+			{o.queryTag, SourceQuery},
+			{o.paramTag, SourceParam},
+			{o.formTag, SourceForm},
+			{o.headerTag, SourceHeader},
+		},
 	}
 }
 
@@ -219,8 +250,12 @@ func (v *Validate) ValidateContext(ctx context.Context, i any) error {
 			// field name via Param(), untouched by RegisterTagNameFunc; resolve and substitute
 			// it the same way so AttributesProvider can override it too.
 			if param := fieldErr.Param(); param != "" && parentType != nil {
-				if paramName, _, _ := v.resolveJSONNameAndType(parentType, param, ""); paramName != "" {
-					replacement := v.resolveDisplayName(parentType, param, paramName)
+				if field, ok := dereferenceType(parentType).FieldByName(param); ok {
+					paramName, _ := v.resolveTagName(field, param)
+					replacement := paramName
+					if label := field.Tag.Get(v.labelTag); label != "" {
+						replacement = label
+					}
 					if attr, ok := attrs[siblingMessageKey(keyPath, paramName)]; ok {
 						replacement = attr
 					}
@@ -275,6 +310,12 @@ func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (strin
 		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 
+	cacheKey := pathCacheKey{typ: t, namespace: structNamespace}
+	if cached, ok := v.pathCache.Load(cacheKey); ok {
+		cp := cached.(cachedPath)
+		return cp.field, cp.source, cp.keyPath, cp.parentType
+	}
+
 	parts := strings.Split(structNamespace, ".")
 	if len(parts) == 0 {
 		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
@@ -315,7 +356,9 @@ func (v *Validate) jsonFieldPath(i any, structNamespace, fallback string) (strin
 		return v.formatPath(fallbackSegments), SourceBody, formatMessageKey(fallbackSegments), nil
 	}
 
-	return v.formatPath(segments), source, formatMessageKey(segments), parentType
+	field, keyPath := v.formatPath(segments), formatMessageKey(segments)
+	v.pathCache.Store(cacheKey, cachedPath{field: field, source: source, keyPath: keyPath, parentType: parentType})
+	return field, source, keyPath, parentType
 }
 
 // siblingMessageKey builds the message key for a field named name declared in the same struct as
@@ -398,16 +441,18 @@ type tagSource struct {
 	source Source
 }
 
-// tagSources returns the configured field-name tags paired with their Source, in
-// resolution priority order.
-func (v *Validate) tagSources() []tagSource {
-	return []tagSource{
-		{v.jsonTag, SourceBody},
-		{v.queryTag, SourceQuery},
-		{v.paramTag, SourceParam},
-		{v.formTag, SourceForm},
-		{v.headerTag, SourceHeader},
+// resolveTagName resolves field's json/query/param/form/header-tag name, falling back to name,
+// along with the Source of whichever tag matched (SourceBody if none did).
+func (v *Validate) resolveTagName(field reflect.StructField, name string) (string, Source) {
+	for _, ts := range v.tagSources {
+		if tagVal := field.Tag.Get(ts.tag); tagVal != "" {
+			jsonName, _, _ := strings.Cut(tagVal, ",")
+			if jsonName != "" && jsonName != "-" {
+				return jsonName, ts.source
+			}
+		}
 	}
+	return name, SourceBody
 }
 
 // resolveJSONNameAndType resolves the field-name tag value for the struct field named name on
@@ -425,41 +470,9 @@ func (v *Validate) resolveJSONNameAndType(current reflect.Type, name, indexSuffi
 		return name, current, SourceBody
 	}
 
-	jsonName := ""
-	source := SourceBody
-	for _, ts := range v.tagSources() {
-		if tagVal := field.Tag.Get(ts.tag); tagVal != "" {
-			jsonName = strings.Split(tagVal, ",")[0]
-			if jsonName != "" && jsonName != "-" {
-				source = ts.source
-				break
-			}
-			jsonName = ""
-		}
-	}
-
-	if jsonName == "" {
-		jsonName = name
-	}
-
+	jsonName, source := v.resolveTagName(field, name)
 	nextType := dereferenceType(field.Type)
 	return jsonName, unwrapIndexedType(nextType, indexSuffix), source
-}
-
-// resolveDisplayName resolves the display name for the struct field named name on parentType,
-// preferring its label tag (matching RegisterTagNameFunc's own priority) and falling back to
-// fallback (typically the json/query/param/form/header-resolved name) when no label is set or
-// the field can't be found.
-func (v *Validate) resolveDisplayName(parentType reflect.Type, name, fallback string) string {
-	parentType = dereferenceType(parentType)
-	if parentType.Kind() == reflect.Struct {
-		if field, ok := parentType.FieldByName(name); ok {
-			if label := field.Tag.Get(v.labelTag); label != "" {
-				return label
-			}
-		}
-	}
-	return fallback
 }
 
 // dereferenceType unwraps successive pointer indirections, returning the underlying element type.
